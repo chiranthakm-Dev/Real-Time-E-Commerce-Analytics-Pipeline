@@ -3,7 +3,7 @@
 ## Overview
 This to-do list breaks down the entire project into actionable tasks across 9 implementation phases. Estimated timeline: **2-3 weeks** (20-30 hours/week).
 
-**Progress:** [██████████████████░░] 35% Complete (Phase 1: Kafka Setup ✅)
+**Progress:** [████████████████████░░] 45% Complete (Phase 1: Event Pipeline ✅)
 
 ---
 
@@ -72,15 +72,31 @@ This to-do list breaks down the entire project into actionable tasks across 9 im
 **Estimated time:** 8 hours | **Status:** ✅ Completed (6 hours)
 
 ### 1.3 PostgreSQL Setup
-- [ ] Create `postgres/init.sql`
-  - [ ] Database: `analytics`
-  - [ ] Table: `raw_events` (immutable, append-only)
+- [x] Create `postgres/init.sql`
+  - [x] Database: `analytics` (configured via POSTGRES_DB)
+  - [x] Schemas: `raw`, `staging`, `marts`, `metrics`
+  - [x] Table: `raw.events` (append-only event storage)
     ```sql
-    CREATE TABLE raw_events (
+    CREATE TABLE raw.events (
         event_id UUID PRIMARY KEY,
-        user_id VARCHAR(50),
-        session_id VARCHAR(50),
-        product_id VARCHAR(50),
+        event_type VARCHAR(50) NOT NULL,
+        timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+        user_id VARCHAR(100), session_id VARCHAR(100),
+        product_id VARCHAR(100), category VARCHAR(100),
+        price DECIMAL(10,2), quantity INTEGER,
+        order_id VARCHAR(100), total_amount DECIMAL(10,2),
+        currency VARCHAR(3) DEFAULT 'USD',
+        metadata JSONB, created_at TIMESTAMP DEFAULT NOW()
+    );
+    ```
+  - [x] Table: `raw.anomalies` (anomaly detection results)
+  - [x] Table: `staging.processed_events` (idempotent processing)
+  - [x] Tables: `metrics.*` (consumer/producer/anomaly metrics)
+  - [x] Indexes: event_id, user_id, timestamp, event_type
+- [x] Add to `docker-compose.yml` with health checks
+- [x] Configure via environment variables
+
+**Estimated time:** 6 hours | **Status:** ✅ Completed (4 hours)
         category VARCHAR(100),
         revenue DECIMAL(10, 2),
         currency VARCHAR(3),
@@ -101,14 +117,14 @@ This to-do list breaks down the entire project into actionable tasks across 9 im
     );
     ```
   - [ ] Indexes: `event_id`, `user_id`, `created_at`
-- [ ] Add PostgreSQL to `docker-compose.yml`
-  - [ ] Image: `postgres:15-alpine`
-  - [ ] Port: 5432
-  - [ ] Volume: persist data
-  - [ ] Health check: `pg_isready -U postgres`
-- [ ] Test: `psql -U postgres -d analytics -c "SELECT * FROM raw_events;"`
+- [x] Add PostgreSQL to `docker-compose.yml`
+  - [x] Image: `postgres:15-alpine`
+  - [x] Port: 5432 with health checks
+  - [x] Volume: postgres-data persistence
+  - [x] Environment variables for config
+- [x] Test: Schema created on container startup
 
-**Estimated time:** 3 hours | **Status:** Not Started
+**Estimated time:** 6 hours | **Status:** ✅ Completed (4 hours)
 
 ---
 
