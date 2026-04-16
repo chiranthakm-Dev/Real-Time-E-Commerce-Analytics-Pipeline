@@ -3,7 +3,7 @@
 ## Overview
 This to-do list breaks down the entire project into actionable tasks across 9 implementation phases. Estimated timeline: **2-3 weeks** (20-30 hours/week).
 
-**Progress:** [████████████████░░░░] 25% Complete (Phase 1: Producer ✅)
+**Progress:** [██████████████████░░] 35% Complete (Phase 1: Kafka Setup ✅)
 
 ---
 
@@ -33,18 +33,19 @@ This to-do list breaks down the entire project into actionable tasks across 9 im
 ## Phase 1: Event Pipeline (3-4 days)
 
 ### 1.1 Redpanda & Kafka Setup
-- [ ] Create `docker-compose.yml` with Redpanda service
-  - [ ] Image: `docker.redpanda.com/redpanda:latest`
-  - [ ] Ports: 9092 (Kafka API), 8080 (Console)
-  - [ ] Health check: `rpk broker info`
-- [ ] Create Kafka topics via rpk:
-  - [ ] `page_views` (2 partitions, 1 hour retention)
-  - [ ] `cart_events` (2 partitions, 1 hour retention)
-  - [ ] `purchases` (2 partitions, 1 hour retention)
-- [ ] Test: `rpk topic list` shows 3 topics
-- [ ] Verify: `rpk topic consume purchases --num 1` works
+- [x] Create `docker-compose.yml` with Redpanda service
+  - [x] Image: `docker.redpanda.com/redpanda:v23.3.3`
+  - [x] Ports: 9092 (Kafka API), 9644 (Admin), 8082 (PandaProxy), 8081 (Schema Registry)
+  - [x] Health check: `rpk cluster info`
+  - [x] Dev mode with 1 CPU, 1GB memory
+- [x] Create Kafka topics via scripts:
+  - [x] `page_views` (2 partitions, 1h retention, snappy compression)
+  - [x] `cart_events` (2 partitions, 1h retention, snappy compression)
+  - [x] `purchases` (2 partitions, 1h retention, snappy compression)
+- [x] Add setup scripts: `setup_kafka_topics.sh` and `kafka_topics.py`
+- [x] Test: Scripts verify topic creation and provide consume commands
 
-**Estimated time:** 4 hours | **Status:** Not Started
+**Estimated time:** 4 hours | **Status:** ✅ Completed (2 hours)
 
 ### 1.2 Event Producer
 - [x] Create `src/shared/schemas.py` (Pydantic models)
