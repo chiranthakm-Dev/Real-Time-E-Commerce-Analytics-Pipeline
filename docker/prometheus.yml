@@ -13,15 +13,15 @@ scrape_configs:
 
   - job_name: 'anomaly-detector'
     static_configs:
-      - targets: ['host.docker.internal:8000']
-    scrape_interval: 5s
+      - targets: ['anomaly-detector:8000']
+    scrape_interval: 30s
 
-  - job_name: 'producer'
+  - job_name: 'redpanda'
     static_configs:
-      - targets: ['host.docker.internal:8001']
-    scrape_interval: 5s
+      - targets: ['redpanda:9644']
+    scrape_interval: 30s
 
-  - job_name: 'consumer'
+  - job_name: 'postgres'
     static_configs:
-      - targets: ['host.docker.internal:8002']
-    scrape_interval: 5s
+      - targets: ['postgres:9187']
+    scrape_interval: 30s

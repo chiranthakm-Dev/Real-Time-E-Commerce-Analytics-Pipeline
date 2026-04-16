@@ -92,21 +92,30 @@ ipython_config.py
 #Pipfile.lock
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow
-__pypackages__/
+__pypoetry__/
+__pypoetry
 
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
+# pdm
+.pdm.toml
+.pdm-python
+.pdm-build/
 
-# SageMath parsed files
-*.sage.py
+# pdm 2.0
+.pdm.lock
 
-# Environments
+# pdm 2.0
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# Virtual environments
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -145,32 +154,45 @@ Thumbs.db
 # Docker
 .dockerignore
 
+# Logs
+logs/
+*.log
+
+# Database
+data/
+postgres/data/
+
 # dbt
 dbt/target/
 dbt/logs/
-dbt/dbt_packages/
-
-# Project specific
-logs/
-*.log
-data/
-temp/
-.cache/
+dbt/.user.yml
 
 # Grafana
 grafana/data/
-grafana/logs/
-
-# Redpanda/Kafka
-redpanda/data/
-kafka-logs/
-
-# PostgreSQL
-postgres/data/
-
-# Node modules (if any)
-node_modules/
 
 # Temporary files
-*.tmp
-*.temp
+tmp/
+temp/
+
+# Secrets (never commit)
+.env.local
+.env.production
+.env.staging
+
+# Test files
+test_*.py
+*_test.py
+
+# Build artifacts
+dist/
+build/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Kubernetes
+*.yaml.bak
+*.yml.bak

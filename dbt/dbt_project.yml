@@ -16,15 +16,20 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
+vars:
+  raw_schema: raw
+  staging_schema: staging
+  marts_schema: marts
+  metrics_schema: metrics
+
 models:
   ecommerce_analytics:
     staging:
-      materialized: view
+      +materialized: view
+      +schema: staging
     marts:
-      materialized: table
+      +materialized: table
+      +schema: marts
     metrics:
-      materialized: table
-
-seeds:
-  ecommerce_analytics:
-    +schema: raw
+      +materialized: incremental
+      +schema: metrics

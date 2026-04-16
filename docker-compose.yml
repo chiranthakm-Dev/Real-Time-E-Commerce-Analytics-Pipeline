@@ -1,65 +1,67 @@
 version: '3.8'
 
 services:
-  # Redpanda (Kafka-compatible)
+  # Message Broker (Redpanda)
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:v23.2.18
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.3
     container_name: ecommerce-redpanda
-    command:
-      - redpanda start
-      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
-      - --pandaproxy-addr 0.0.0.0:8082
-      - --advertise-pandaproxy-addr localhost:8082
-      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
-      - --rpc-addr 0.0.0.0:33145
-      - --advertise-rpc-addr redpanda:33145
-      - --mode dev-container
-      - --smp 1
-      - --memory 1G
-      - --reserve-memory 0M
-      - --overprovisioned
-      - --node-id 0
-      - --check=false
     ports:
-      - "19092:19092"  # Kafka external
-      - "18081:18081"  # Schema Registry external
-      - "8082:8082"    # HTTP Proxy
+      - "9092:9092"
+      - "9644:9644"
+    command:
+      - redpanda
+      - start
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://localhost:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=localhost:8082
+      - --schema-registry-addr=0.0.0.0:8081
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=localhost:33145
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster info --brokers redpanda:9092"]
+      test: ["CMD-SHELL", "rpk cluster info"]
       interval: 30s
       timeout: 10s
       retries: 5
     volumes:
-      - redpanda_data:/var/lib/redpanda/data
+      - redpanda-data:/var/lib/redpanda/data
 
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: ecommerce-postgres
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-analytics}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./postgres/init:/docker-entrypoint-initdb.d
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-analytics}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 30s
       timeout: 10s
       retries: 5
+    restart: unless-stopped
 
-  # Prometheus for metrics
+  # Prometheus Monitoring
   prometheus:
-    image: prom/prometheus:v2.45.0
+    image: prom/prometheus:v2.48.0
     container_name: ecommerce-prometheus
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_PORT}:9090"
     volumes:
-      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -67,25 +69,97 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
+    restart: unless-stopped
 
-  # Grafana for dashboards
+  # Grafana Dashboard
   grafana:
-    image: grafana/grafana:10.1.0
+    image: grafana/grafana:10.2.0
     container_name: ecommerce-grafana
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
-      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"
     ports:
       - "3000:3000"
     volumes:
-      - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
+    restart: unless-stopped
+
+  # Event Producer Service
+  producer:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.producer
+    container_name: ecommerce-producer
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - PRODUCER_THROUGHPUT=${PRODUCER_THROUGHPUT}
+      - PRODUCER_ANOMALY_RATE=${PRODUCER_ANOMALY_RATE}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+
+  # Event Consumer Service
+  consumer:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.consumer
+    container_name: ecommerce-consumer
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - CONSUMER_GROUP_ID=${CONSUMER_GROUP_ID}
+      - CONSUMER_BATCH_SIZE=${CONSUMER_BATCH_SIZE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+
+  # Anomaly Detection Service
+  anomaly-detector:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.anomaly
+    container_name: ecommerce-anomaly-detector
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - ANOMALY_CONTAMINATION=${ANOMALY_CONTAMINATION}
+      - ANOMALY_POLLING_INTERVAL=${ANOMALY_POLLING_INTERVAL}
+      - ANOMALY_WINDOW_SIZE=${ANOMALY_WINDOW_SIZE}
+      - ANOMALY_METRICS_PORT=${ANOMALY_METRICS_PORT}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+    ports:
+      - "${ANOMALY_METRICS_PORT}:${ANOMALY_METRICS_PORT}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      consumer:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
 
 volumes:
-  redpanda_data:
-  postgres_data:
-  grafana_data:
+  redpanda-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:

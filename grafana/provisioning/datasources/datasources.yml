@@ -14,8 +14,11 @@ datasources:
     url: postgres:5432
     user: postgres
     database: analytics
-    jsonData:
-      sslmode: disable
     secureJsonData:
-      password: postgres
+      password: '${POSTGRES_PASSWORD}'
+    jsonData:
+      sslmode: 'disable'
+      maxOpenConns: 100
+      maxIdleConns: 10
+      connMaxLifetime: 14400
     editable: true

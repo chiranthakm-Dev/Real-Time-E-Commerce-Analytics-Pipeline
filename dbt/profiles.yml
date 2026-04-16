@@ -3,12 +3,12 @@ ecommerce_analytics:
   outputs:
     dev:
       type: postgres
-      host: localhost
-      user: "{{ env_var('POSTGRES_USER') }}"
-      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      host: postgres
       port: 5432
-      dbname: "{{ env_var('POSTGRES_DB') }}"
-      schema: analytics
+      user: postgres
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: analytics
+      schema: marts
       threads: 4
       keepalives_idle: 0
       connect_timeout: 10
