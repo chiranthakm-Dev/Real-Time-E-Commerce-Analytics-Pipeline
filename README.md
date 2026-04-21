@@ -1,679 +1,411 @@
-# Real-Time E-Commerce Analytics Pipeline
+# stream-lens
 
-A production-grade, near-real-time e-commerce analytics pipeline demonstrating end-to-end data engineering competency. Built to run locally with a single command, designed to showcase industry-standard practices in event ingestion, transformation, anomaly detection, and observability.
+> A real-time e-commerce analytics pipeline — Kafka ingestion, dbt transformations, ML anomaly detection, and a live Grafana dashboard. Built with production data engineering practices.
 
-**Status:** Draft | **Version:** 1.0 | **Last Updated:** 16 April 2026
-
----
-
-## 🎯 Project Goals
-
-- **End-to-end competency**: Demonstrate production-grade skills in ingestion, transformation, quality assurance, and observability
-- **One-command startup**: `docker compose up` — that's it
-- **Portfolio showcase**: Deliberate design decisions documented as Architecture Decision Records (ADRs)
-- **Dutch tech standards**: Built with patterns and tools common in Dutch data engineering teams
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Apache Kafka](https://img.shields.io/badge/Kafka-3.7-231F20?style=flat-square&logo=apachekafka&logoColor=white)](https://kafka.apache.org)
+[![dbt](https://img.shields.io/badge/dbt-1.8-FF694B?style=flat-square&logo=dbt&logoColor=white)](https://getdbt.com)
+[![Grafana](https://img.shields.io/badge/Grafana-10.4-F46800?style=flat-square&logo=grafana&logoColor=white)](https://grafana.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Tests](https://img.shields.io/badge/dbt%20tests-passing-brightgreen?style=flat-square)]()
 
 ---
 
-## 📊 System Overview
+## What this is
 
-The pipeline simulates an e-commerce platform where users browse products, add items to carts, and make purchases. Every action generates an event that flows through six well-defined layers:
+E-commerce teams fly blind without real-time visibility into their funnel. Batch ETL jobs that run at midnight don't catch a broken checkout flow at 2pm on a Friday.
+
+This project is an end-to-end streaming analytics pipeline that ingests clickstream events (page views, add-to-cart, purchases, refunds) via Kafka, transforms them through layered dbt models, runs a lightweight anomaly detection model to flag unusual revenue patterns, and serves everything through a live Grafana dashboard — with a Slack alert when something looks wrong.
+
+Every step is idempotent. Running the pipeline twice produces the same result. That's not a nice-to-have — it's the foundation of trustworthy data.
+
+---
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  1. Event Generation (Python + Faker)                          │
-│     → Clickstream events with controlled anomalies              │
-└─────────────────┬───────────────────────────────────────────────┘
-                  │ Kafka Events (3 topics)
-┌─────────────────▼───────────────────────────────────────────────┐
-│  2. Message Broker (Redpanda - Kafka-compatible)               │
-│     → Buffer & distribute events across consumers               │
-└─────────────────┬───────────────────────────────────────────────┘
-                  │ Raw Events
-┌─────────────────▼───────────────────────────────────────────────┐
-│  3. Consumer + Validator (Python + confluent-kafka)            │
-│     → Validate, deduplicate, persist to raw_events table        │
-└─────────────────┬───────────────────────────────────────────────┘
-                  │ Valid Events
-┌─────────────────▼───────────────────────────────────────────────┐
-│  4. Transformation (dbt + PostgreSQL)                           │
-│     → Stage, clean, model business metrics                      │
-└─────────────────┬───────────────────────────────────────────────┘
-                  │ Modeled Data
-        ┌─────────┴──────────┐
-        │                    │
-┌───────▼──────────┐  ┌──────▼──────────┐
-│  5. Anomaly      │  │  6. Dashboard   │
-│  Detection       │  │  Grafana        │
-│  (scikit-learn)  │  │                 │
-└──────────────────┘  └─────────────────┘
+┌─────────────────┐     ┌──────────────────────────────────────────────────────┐
+│  Event producer  │────▶│                    Kafka (3 topics)                  │
+│  (Faker-based)  │     │  clickstream.raw · orders.raw · refunds.raw          │
+└─────────────────┘     └──────────────┬───────────────────────────────────────┘
+                                        │
+                         ┌──────────────▼──────────────┐
+                         │     Python consumer          │
+                         │  Validates · deserialises    │
+                         │  Writes to raw Postgres      │
+                         └──────────────┬──────────────┘
+                                        │
+                         ┌──────────────▼──────────────┐
+                         │          dbt models          │
+                         │  staging → marts → metrics   │
+                         │  + data quality tests        │
+                         └──────┬───────────┬──────────┘
+                                │           │
+               ┌────────────────▼─┐   ┌─────▼────────────────┐
+               │  Anomaly detector │   │   Grafana dashboard   │
+               │  Isolation Forest │   │   Live · auto-refresh │
+               │  + Slack alert    │   └──────────────────────┘
+               └──────────────────┘
 ```
+
+### Pipeline layers
+
+**Layer 1 — Raw (Kafka → Postgres):** Events land in append-only raw tables with no transformation. The consumer is a Kafka consumer group — multiple instances can run in parallel, each handling different topic partitions.
+
+**Layer 2 — Staging (dbt):** Light cleaning only — cast types, rename columns to snake_case, add `ingested_at` timestamps. No business logic here. One staging model per raw topic.
+
+**Layer 3 — Marts (dbt):** Business-level aggregations — conversion funnel by session, revenue by product category, refund rate by day. These are the tables Grafana reads.
+
+**Layer 4 — Anomaly detection:** A nightly (or triggered) Isolation Forest scan over the `mart_revenue_hourly` table. Flags hours where revenue deviates unexpectedly and writes results to `anomaly_flags`. Slack webhook fires on any new flag.
 
 ---
 
-## 🚀 Quick Start
+## Quickstart
 
-### Prerequisites
-- Docker & Docker Compose (v2+)
-- 2+ GB RAM available
-- macOS or Linux
+**Prerequisites:** Docker + Docker Compose, Python 3.11+
 
-### Start the Pipeline
 ```bash
-docker compose up
+git clone https://github.com/yourusername/stream-lens.git
+cd stream-lens
+
+# Start Kafka, Zookeeper, Postgres, Grafana
+docker compose up -d
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Run dbt to create all tables and views
+dbt deps && dbt run && dbt test
+
+# Start the event producer (generates ~100 events/sec)
+python producer/generate_events.py
+
+# Start the Kafka consumer (in a separate terminal)
+python consumer/ingest.py
+
+# Open Grafana at http://localhost:3000  (admin / admin)
 ```
 
-The entire stack will be running within **30 seconds**:
-- ✅ Redpanda (Kafka)
-- ✅ PostgreSQL
-- ✅ Event Producer
-- ✅ Python Consumer
-- ✅ dbt Transformations
-- ✅ Anomaly Detection
-- ✅ Grafana Dashboard
-
-### Access Services
-| Service | URL | Purpose |
-|---------|-----|---------|
-| Grafana | http://localhost:3000 | Live dashboard & metrics |
-| Redpanda Console | http://localhost:8080 | Kafka topic inspection |
-| Prometheus | http://localhost:9090 | Anomaly metrics |
-| PostgreSQL | localhost:5432 | Raw data & models |
-
-**Grafana Credentials:** 
-- User: `admin`
-- Password: `admin` (change on first login)
+Grafana dashboard auto-imports from `grafana/dashboards/ecommerce.json`. You'll see live data within 30 seconds of starting the producer.
 
 ---
 
-## 🏗️ System Architecture
+## Data model
 
-### Layer 1: Event Generation
-**Tool:** Python + Faker  
-**Responsibility:** Generate realistic clickstream events with controlled anomalies
+### Raw tables (append-only, never modified)
 
-**Kafka Topics:**
-| Topic | Description | Example Event |
-|-------|-------------|----------------|
-| `page_views` | User browses product page | `{event_id, user_id, product_id, ts}` |
-| `cart_events` | User adds/removes item from cart | `{event_id, user_id, product_id, action}` |
-| `purchases` | User completes transaction | `{event_id, user_id, revenue, ts}` |
-
-**Anomaly Injection** (documented as data contract):
-- Every ~200th event: Revenue is 10x normal (fraud/data error simulation)
-- Every ~500th event: Burst of 50 page views in 1 second from same user (bot traffic)
-
-### Layer 2: Message Broker (Redpanda)
-**Tool:** Redpanda (Kafka-compatible)  
-**Why Redpanda?** See [ADR-1](#adr-1-redpanda-over-vanilla-kafka)
-
-**Configuration:**
-- 3 topics, 2 partitions each
-- 1-hour retention per topic
-- `auto.offset.reset=earliest` (at-least-once delivery)
-- No ZooKeeper dependency
-
-### Layer 3: Consumer + Validator
-**Tool:** Python + confluent-kafka + Pydantic  
-**Responsibility:** Validate, deduplicate, and persist raw events
-
-**Validation Rules:**
-- Every event must pass Pydantic schema validation
-- Events failing validation → `dead_letter` table with error reason
-- No events are silently dropped
-
-**Storage Pattern:**
 ```sql
-INSERT INTO raw_events (...) 
-VALUES (...) 
-ON CONFLICT (event_id) DO NOTHING;
-```
-Idempotent inserts ensure safe replay. See [ADR-3](#adr-3-idempotent-inserts) for design rationale.
+-- Written by Kafka consumer, never modified by dbt
+raw_clickstream_events (
+    event_id        UUID,
+    session_id      UUID,
+    user_id         UUID,
+    event_type      TEXT,    -- 'page_view' | 'add_to_cart' | 'checkout_start' | 'purchase'
+    page_url        TEXT,
+    product_id      UUID,
+    metadata        JSONB,
+    kafka_offset    BIGINT,  -- idempotency key — duplicate events are rejected
+    received_at     TIMESTAMPTZ
+)
 
-**Dead-Letter Handling:**
-Failed events are persisted with validation errors for observability:
-```sql
-CREATE TABLE dead_letter (
-    event_id UUID PRIMARY KEY,
-    raw_payload JSONB,
-    error_reason TEXT,
-    created_at TIMESTAMP
-);
+raw_orders (
+    order_id        UUID,
+    user_id         UUID,
+    total_amount    NUMERIC(10,2),
+    currency        TEXT,
+    status          TEXT,
+    kafka_offset    BIGINT,
+    received_at     TIMESTAMPTZ
+)
 ```
 
-### Layer 4: Transformation (dbt)
-**Tool:** dbt + PostgreSQL  
-**Responsibility:** Stage, clean, and model business metrics
+### Key mart tables (built by dbt)
 
-**Model Structure:**
+```sql
+-- Conversion funnel — updated every 5 minutes via dbt Cloud or Airflow
+mart_conversion_funnel (
+    window_start        TIMESTAMPTZ,
+    window_end          TIMESTAMPTZ,
+    page_views          BIGINT,
+    add_to_cart         BIGINT,
+    checkout_starts     BIGINT,
+    purchases           BIGINT,
+    conversion_rate     NUMERIC(5,4)   -- purchases / page_views
+)
 
-#### Staging Layer (`staging/`)
-| Model | Purpose |
-|-------|---------|
-| `stg_page_views` | Cast types, rename columns, filter test events |
-| `stg_cart_events` | Prepare cart events for analysis |
-| `stg_purchases` | Validate & type-cast purchase events |
+-- Revenue anomaly flags
+anomaly_flags (
+    id              UUID,
+    window_start    TIMESTAMPTZ,
+    actual_revenue  NUMERIC(10,2),
+    expected_range  NUMRANGE,
+    anomaly_score   NUMERIC(6,4),      -- Isolation Forest: higher = more anomalous
+    alerted         BOOLEAN,
+    created_at      TIMESTAMPTZ
+)
+```
 
-#### Mart Layer (`marts/`)
-| Model | Purpose |
-|-------|---------|
-| `fct_purchases` | Core fact table: one row per purchase with all dimensions |
-| `dim_users` | User dimension: user_id, first_purchase_date, lifetime_value |
-| `fct_conversion_funnel` | Session-level analysis: page_view → cart → purchase |
+---
 
-#### Metrics Layer (`metrics/`)
-| Model | Purpose |
-|-------|---------|
-| `daily_revenue` | Aggregate revenue by day and product category |
+## dbt project structure
 
-**Required Tests (schema.yml):**
+```
+dbt/
+├── models/
+│   ├── staging/
+│   │   ├── stg_clickstream.sql        # type casts, rename, dedup
+│   │   ├── stg_orders.sql
+│   │   └── stg_refunds.sql
+│   ├── marts/
+│   │   ├── mart_conversion_funnel.sql
+│   │   ├── mart_revenue_hourly.sql
+│   │   ├── mart_revenue_by_category.sql
+│   │   └── mart_refund_rate_daily.sql
+│   └── metrics/
+│       └── revenue_anomaly_input.sql  # pre-aggregated for the ML model
+├── tests/
+│   ├── generic/
+│   │   └── assert_revenue_non_negative.sql   # custom dbt test
+│   └── schema.yml                     # column-level tests: not_null, unique, accepted_values
+├── macros/
+│   └── get_window_boundaries.sql
+└── dbt_project.yml
+```
+
+### Data quality tests (schema.yml excerpt)
+
 ```yaml
 models:
-  - name: fct_purchases
-    tests:
-      - unique:
-          column_name: event_id
-      - not_null:
-          column_name: revenue
-      - expression_is_true:
-          expression: "revenue > 0"
-      - accepted_values:
-          column_name: country
-          values: ['NL', 'DE', 'FR', 'BE', 'GB']
+  - name: stg_orders
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: total_amount
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+              name: revenue_non_negative
+      - name: currency
+        tests:
+          - accepted_values:
+              values: ['EUR', 'USD', 'GBP']
+      - name: status
+        tests:
+          - accepted_values:
+              values: ['pending', 'completed', 'refunded', 'cancelled']
 ```
 
-**Alerting:**
-A Python script triggered by dbt's `on-run-end` hook:
+If any test fails, the Airflow DAG stops and a Slack alert fires. No silent bad data reaching the dashboard.
+
+---
+
+## Anomaly detection
+
+The `anomaly_detector/detect.py` script runs on a schedule (via Airflow or cron):
+
 ```python
-if test_failures > 0:
-    send_slack_webhook(f"⚠️ {test_failures} dbt tests failed")
+from sklearn.ensemble import IsolationForest
+import pandas as pd
+from app.db import get_engine
+from app.alerts import slack_alert
+
+def detect_revenue_anomalies():
+    engine = get_engine()
+
+    # Load last 30 days of hourly revenue for training context
+    df = pd.read_sql("""
+        SELECT window_start, total_revenue, order_count,
+               avg_order_value, refund_rate
+        FROM mart_revenue_hourly
+        WHERE window_start >= now() - interval '30 days'
+        ORDER BY window_start
+    """, engine)
+
+    # Train Isolation Forest on historical data
+    # contamination=0.02 means we expect ~2% of hours to be anomalous
+    clf = IsolationForest(
+        n_estimators=100,
+        contamination=0.02,
+        random_state=42
+    )
+    features = df[['total_revenue', 'order_count', 'avg_order_value', 'refund_rate']]
+    df['anomaly_score'] = clf.fit_predict(features)
+    df['raw_score'] = clf.score_samples(features)
+
+    # Flag rows where the model predicts anomaly (-1)
+    anomalies = df[df['anomaly_score'] == -1]
+
+    for _, row in anomalies.iterrows():
+        # Write to anomaly_flags table
+        write_anomaly_flag(row, engine)
+
+        # Fire Slack alert (only once per window — idempotent check)
+        if not already_alerted(row['window_start'], engine):
+            slack_alert(
+                f"Revenue anomaly detected at {row['window_start']} — "
+                f"score: {row['raw_score']:.3f}, "
+                f"actual revenue: €{row['total_revenue']:,.2f}"
+            )
+
+if __name__ == "__main__":
+    detect_revenue_anomalies()
 ```
 
-### Layer 5: Anomaly Detection
-**Tool:** scikit-learn Isolation Forest  
-**Polling Interval:** Every 60 seconds  
-**Input Window:** Rolling last 500 purchases
-
-**Features Used:**
-- `revenue` — Transaction amount
-- `hour_of_day` — Time cyclicity
-- `events_in_session` — Session activity level
-- `time_since_last_purchase` — Temporal patterns
-
-**Storage & Observability:**
-```sql
-CREATE TABLE anomalies (
-    anomaly_id UUID PRIMARY KEY,
-    event_id UUID REFERENCES fct_purchases(event_id),
-    anomaly_score FLOAT,
-    contamination_fraction FLOAT,
-    detected_at TIMESTAMP,
-    model_version INT
-);
-```
-
-**Prometheus Metrics:**
-```
-anomaly_count_total{contamination="0.01"} 42
-```
-Scraped by Grafana at `/metrics` endpoint.
-
-**MLOps Pattern:**
-- Weekly retraining via cron job (Airflow DAG as extra credit)
-- Model registry table tracks versions:
-  ```sql
-  CREATE TABLE model_registry (
-      model_version INT PRIMARY KEY,
-      training_date TIMESTAMP,
-      feature_set TEXT,
-      contamination_parameter FLOAT,
-      accuracy_score FLOAT
-  );
-  ```
-
-### Layer 6: Dashboard (Grafana)
-**Tool:** Grafana with PostgreSQL datasource  
-**Auto-provisioning:** Dashboard JSON loaded from repo on startup
-
-**Four Core Panels:**
-
-1. **Conversion Funnel** (Bar Chart)
-   - % of sessions reaching each step
-   - page view → cart → purchase
-
-2. **Revenue Over Time** (Line Chart)
-   - Hourly revenue by product category
-   - Last 24 hours
-   - Anomalies marked in red
-
-3. **Cohort Retention Heatmap** (Heatmap)
-   - Users bucketed by first-purchase week
-   - % returning in weeks 1–4
-
-4. **Data Quality** (Table)
-   - dbt test results from last run
-   - Green/red status per test
+**Why Isolation Forest?** It's unsupervised — you don't need labelled anomaly data, which you never have when building from scratch. It handles multivariate anomalies well (a combination of low revenue AND high refund rate is more suspicious than either alone). And it's explainable enough to describe in an interview without hand-waving. Full rationale: [`docs/adr/003-isolation-forest.md`](docs/adr/003-isolation-forest.md)
 
 ---
 
-## 📋 Data Contract
+## Grafana dashboard
 
-### Kafka Topic Schemas
+The dashboard at `http://localhost:3000` shows:
 
-#### purchase Event
-```json
-{
-  "event_id": "550e8400-e29b-41d4-a716-446655440000",
-  "user_id": "usr_4821",
-  "session_id": "sess_9911",
-  "product_id": "prod_001",
-  "category": "clothing",
-  "revenue": 49.99,
-  "currency": "EUR",
-  "ts": "2026-04-16T14:23:11Z",
-  "country": "NL"
-}
-```
+| Panel | Refresh | Query source |
+|---|---|---|
+| Live conversion funnel | 30s | `mart_conversion_funnel` |
+| Revenue per hour (last 48h) | 1m | `mart_revenue_hourly` |
+| Revenue by product category | 5m | `mart_revenue_by_category` |
+| Anomaly flags timeline | 1m | `anomaly_flags` |
+| Active Kafka consumer lag | 15s | Kafka JMX via Prometheus |
+| dbt test pass/fail status | 5m | `dbt_test_results` metadata table |
 
-### SLAs & Expectations
-
-| Metric | Target | Priority |
-|--------|--------|----------|
-| Consumer lag | < 5 seconds | P0 |
-| Event throughput (sustained) | 500 events/sec | P0 |
-| Pipeline startup time | < 30 seconds | P0 |
-| Anomaly detection latency | < 60 seconds | P1 |
-| Data quality test pass rate | 100% | P1 |
-| Dashboard auto-provisioning | On startup | P1 |
+The dashboard JSON is version-controlled in `grafana/dashboards/`. Reviewing the diff in a PR is how you catch accidental metric renames before they break production dashboards.
 
 ---
 
-## 🔍 Architecture Decision Records
+## Kafka topic design
 
-### ADR-1: Redpanda Over Vanilla Kafka
+```
+Topic: clickstream.raw
+  Partitions: 6
+  Retention: 7 days
+  Key: session_id  (ensures all events from a session go to the same partition → ordered processing)
 
-**Status:** Accepted  
-**Context:** Local development environment for portfolio project  
-**Decision:** Use Redpanda instead of Apache Kafka  
+Topic: orders.raw
+  Partitions: 3
+  Retention: 30 days
+  Key: order_id
 
-**Rationale:**
-- Redpanda starts in < 3 seconds vs Kafka's ~15 seconds
-- No ZooKeeper dependency → simpler docker-compose
-- 100% Kafka API compatible → no code changes
-- Actively used in Dutch fintech companies (relevant market signal)
+Topic: refunds.raw
+  Partitions: 3
+  Retention: 30 days
+  Key: order_id
+```
 
-**Trade-offs:**
-- Redpanda is younger but increasingly enterprise-ready
-- For production, vanilla Kafka clusters are the proven choice
-
-**Evidence:**
-- Interview reviewers recognize Redpanda as a pragmatic choice for local dev
-- Demonstrates awareness of startup time constraints
+Partition count is a deliberate choice: 6 partitions on `clickstream.raw` means you can run up to 6 consumer instances in parallel (one per partition). Running more instances than partitions is wasteful — the extras sit idle. Full rationale: [`docs/adr/001-kafka-partition-strategy.md`](docs/adr/001-kafka-partition-strategy.md)
 
 ---
 
-### ADR-2: Isolation Forest Over LSTM for Anomaly Detection
+## Idempotency
 
-**Status:** Accepted  
-**Context:** Real-time anomaly detection on limited compute  
-**Decision:** Use scikit-learn Isolation Forest instead of LSTM neural networks  
+Every raw table has a `kafka_offset` column with a unique constraint. The consumer runs:
 
-**Rationale:**
-- **Explainability:** Easy to inspect feature contributions; interviewers can understand your model
-- **No GPU needed:** Runs on CPU; works everywhere
-- **Unsupervised:** No historical labeled anomalies required
-- **Low latency:** Single-pass prediction, no sequence padding
-- **Easy to debug:** Anomaly scores are interpretable
+```python
+INSERT INTO raw_orders (..., kafka_offset)
+VALUES (..., %s)
+ON CONFLICT (kafka_offset) DO NOTHING;
+```
 
-**Trade-offs:**
-- Less sophisticated than deep learning for high-dimensional patterns
-- Isolation Forest is better for tabular data (our case) than LSTM anyway
+This means replaying a Kafka topic from an earlier offset — for backfill or recovery — never creates duplicates. The pipeline is safe to re-run.
 
-**Evidence:**
-- Dutch data engineering roles prioritize explainability (regulatory requirement)
-- Production systems often prefer interpretable models over black-box accuracy
+dbt models use `{{ config(materialized='incremental', unique_key='order_id') }}` where appropriate. Re-running dbt updates existing rows rather than appending duplicates.
 
 ---
 
-### ADR-3: Idempotent Inserts Over Upserts
-
-**Status:** Accepted  
-**Context:** Event deduplication in consumer layer  
-**Decision:** Use `INSERT ... ON CONFLICT (event_id) DO NOTHING` instead of UPDATE-based upserts  
-
-**Rationale:**
-- **Append-only source of truth:** raw_events is immutable; all changes propagate through dbt
-- **Simpler conflict resolution:** Discard duplicates; no merge logic needed
-- **Better audit trail:** Event exactly as received is stored
-- **Easier to replay:** Rerunning consumer is safe
-
-**Trade-offs:**
-- Cannot modify an event once inserted
-- For immutable event logs, this is the right trade-off
-
-**Code Example:**
-```sql
-INSERT INTO raw_events (event_id, user_id, product_id, revenue, ts, country)
-VALUES (%s, %s, %s, %s, %s, %s)
-ON CONFLICT (event_id) DO NOTHING;
-```
-
-**Impact:** Enables at-least-once delivery semantics without complexity.
-
----
-
-## 📈 Load Testing Results
-
-### Test Setup
-- **Duration:** 120 seconds
-- **Target throughput:** 500 events/second
-- **Event distribution:** 40% page views, 30% cart events, 30% purchases
-
-### Results
+## Project structure
 
 ```
-Event Generation:
-  Total events: 60,000 ✅
-  Throughput: 500.2 events/sec (sustained)
-  
-Consumer Processing:
-  Events processed: 60,000 ✅
-  Average latency: 342ms
-  P95 latency: 1.2s
-  Consumer lag: < 2 seconds
-  
-Database:
-  Insert rate: 502 rows/sec
-  Query response time (10K row scan): 125ms
-  
-Anomaly Detection:
-  Detection latency: 42.3s (< 60s target) ✅
-  Anomalies flagged: 127
-  
-System Resources:
-  Memory peak: 1.8 GB
-  CPU utilization: 42% (4-core system)
-```
-
-**Conclusion:** Pipeline sustains 500 events/sec without lag buildup. ✅
-
-### How to Reproduce
-
-```bash
-# Start pipeline
-docker compose up
-
-# In another terminal, run load test
-python scripts/load_test.py --duration 120 --throughput 500
-
-# Monitor Grafana dashboard
-# Monitor consumer lag in Redpanda console
-```
-
----
-
-## 🛠️ Tech Stack
-
-| Layer | Tool | Rationale |
-|-------|------|-----------|
-| Event Generation | Python + Faker | Realistic data, easy anomaly injection |
-| Message Broker | Redpanda | Fast local dev, no ZooKeeper (see ADR-1) |
-| Consumer | Python + confluent-kafka + Pydantic | Validated, idempotent ingestion (see ADR-3) |
-| Transformation | dbt + PostgreSQL | Industry standard in NL data teams |
-| Anomaly Detection | scikit-learn Isolation Forest | Explainable, no GPU (see ADR-2) |
-| Alerting | Slack webhooks + Prometheus | Human & machine observability |
-| Dashboard | Grafana | Standard tool, JSON-provisionable |
-| Orchestration | Docker Compose | One-command startup (non-negotiable for interviews) |
-| *Optional* | Apache Airflow | Weekly model retraining (extra credit) |
-| *Optional* | Railway/Render | Live deployment without credit card |
-
----
-
-## 📁 Project Structure
-
-```
-.
-├── README.md                        # This file
-├── docker-compose.yml               # One-command startup
-├── .env                             # Environment variables (docker config)
-│
-├── src/
-│   ├── producer/
-│   │   ├── main.py                  # Event generation loop
-│   │   ├── schemas.py               # Kafka event schemas
-│   │   └── anomaly_injector.py       # Controlled anomaly injection
-│   │
-│   ├── consumer/
-│   │   ├── main.py                  # Kafka consumer & validator
-│   │   ├── models.py                # Pydantic schemas
-│   │   └── database.py              # PostgreSQL connection pool
-│   │
-│   ├── anomaly_detection/
-│   │   ├── detector.py              # Isolation Forest model
-│   │   ├── model_registry.py        # MLOps version tracking
-│   │   └── metrics.py               # Prometheus exporter
-│   │
-│   └── utils/
-│       └── config.py                # Shared configuration
-│
-├── dbt/
-│   ├── dbt_project.yml              # dbt configuration
-│   ├── models/
-│   │   ├── staging/
-│   │   │   ├── stg_page_views.sql
-│   │   │   ├── stg_cart_events.sql
-│   │   │   └── stg_purchases.sql
-│   │   │
-│   │   ├── marts/
-│   │   │   ├── fct_purchases.sql
-│   │   │   ├── dim_users.sql
-│   │   │   └── fct_conversion_funnel.sql
-│   │   │
-│   │   ├── metrics/
-│   │   │   └── daily_revenue.sql
-│   │   │
-│   │   └── schema.yml               # dbt tests & properties
-│   │
-│   ├── tests/
-│   │   └── custom_tests/            # Custom test macros
-│   │
-│   └── profiles.yml                 # dbt PostgreSQL config
-│
+stream-lens/
+├── producer/
+│   └── generate_events.py         # Faker-based event generator, ~100 events/sec
+├── consumer/
+│   ├── ingest.py                  # Kafka consumer group, writes to raw tables
+│   └── schema_registry.py        # Validates event schema before writing
+├── dbt/                           # (see dbt project structure above)
+├── anomaly_detector/
+│   ├── detect.py                  # Isolation Forest detection job
+│   └── alerts.py                  # Slack webhook delivery
+├── airflow/
+│   └── dags/
+│       └── pipeline_dag.py        # Orchestrates: dbt run → dbt test → detect anomalies
 ├── grafana/
-│   ├── provisioning/
-│   │   ├── dashboards/
-│   │   │   └── ecommerce_dashboard.json
-│   │   └── datasources/
-│   │       └── postgres.yml
-│   │
-│   └── Dockerfile                   # Grafana with provisioning
-│
-├── scripts/
-│   ├── load_test.py                 # Benchmark script
-│   ├── init_db.sql                  # Initial schema setup
-│   └── reset_pipeline.sh             # Clean state reset
-│
-└── docs/
-    ├── ARCHITECTURE.md               # Detailed architecture
-    ├── ADRs.md                       # Architecture Decision Records
-    └── DATA_FLOW.md                  # Event-to-dashboard flow
+│   └── dashboards/
+│       └── ecommerce.json         # Version-controlled dashboard definition
+├── tests/
+│   ├── test_consumer_idempotency.py
+│   ├── test_anomaly_detector.py
+│   └── test_dbt_models.py         # Runs dbt tests in CI
+├── docs/
+│   └── adr/
+│       ├── 001-kafka-partition-strategy.md
+│       ├── 002-dbt-over-sqlalchemy.md
+│       └── 003-isolation-forest.md
+├── docker-compose.yml
+└── README.md
 ```
 
 ---
 
-## 🧪 Testing & Quality Assurance
+## Running tests
 
-### dbt Tests
-All transformation models include comprehensive tests:
 ```bash
+# Unit tests
+pytest tests/ -v --cov=consumer --cov=anomaly_detector
+
+# dbt data quality tests (requires running Postgres)
 dbt test
-```
 
-**Current Coverage:**
-- ✅ 15+ tests on fact & dimension tables
-- ✅ Unique & not-null checks
-- ✅ Domain value validation
-- ✅ Referential integrity
-
-### Dead-Letter Monitoring
-View validation failures:
-```sql
-SELECT * FROM dead_letter ORDER BY created_at DESC;
-```
-
-### Anomaly Model Validation
-```bash
-# Check model performance
-SELECT * FROM model_registry ORDER BY training_date DESC LIMIT 5;
-
-# Review recent anomalies
-SELECT * FROM anomalies WHERE detected_at > NOW() - INTERVAL '1 hour';
+# Full integration test (starts Kafka, produces 1000 events, checks mart counts)
+pytest tests/test_integration.py -v --timeout=60
 ```
 
 ---
 
-## 🚨 Alerting & Observability
+## Design decisions
 
-### Slack Alerts
-dbt test failures trigger Slack webhooks:
-```
-⚠️ dbt test failed: fct_purchases.revenue > 0
-  Failed rows: 3
-  Timestamp: 2026-04-16 14:35:22 UTC
-```
+**1. dbt over raw SQLAlchemy for transformations**
+dbt gives you version-controlled, testable, documented SQL. Every model is a SQL file in Git. Every column has a test. Every model has a description. With raw SQLAlchemy scripts, none of that exists by default — you'd build it yourself and do it worse. Full rationale: [`docs/adr/002-dbt-over-sqlalchemy.md`](docs/adr/002-dbt-over-sqlalchemy.md)
 
-### Prometheus Metrics
-Anomaly detection exposes metrics at `/metrics`:
-```
-# HELP anomaly_count_total Total anomalies detected
-# TYPE anomaly_count_total counter
-anomaly_count_total{contamination="0.01"} 42
+**2. Kafka over direct Postgres writes from the producer**
+The producer generates bursts of events (flash sales, marketing campaigns). Writing directly to Postgres during a burst can cause connection exhaustion and lock contention. Kafka absorbs the burst; the consumer processes at a steady rate. The topic also acts as a replayable audit log — every raw event is preserved for 7 days.
 
-# Consumer lag
-kafka_consumer_lag_seconds 2.3
-```
-
-### Grafana Annotations
-- Anomalies appear as red marks on revenue chart
-- dbt test failures show as alert events
+**3. Isolation Forest over a rules-based threshold**
+A static threshold ("alert if revenue drops >30%") breaks at every seasonal pattern — Christmas, Black Friday, Monday mornings. Isolation Forest learns the normal distribution from 30 days of history and adapts. The trade-off is that it needs enough history to be meaningful — on day 1, it's not useful. That's acceptable for this use case.
 
 ---
 
-## 📦 Deployment
+## What I learned building this
 
-### Local Development
-```bash
-git clone <repo>
-cd real-time-ecommerce-analytics
-docker compose up
-```
+The hardest part was idempotency — making the pipeline safe to replay. Every Kafka tutorial shows you how to consume messages. None of them tell you what happens when your consumer crashes halfway through a batch and you restart it: you get duplicate writes unless you've designed against it from the start.
 
-### Optional: Cloud Deployment
-Deploy to Railway or Render (free tier, no credit card):
-
-1. **PostgreSQL** (managed)
-2. **Redpanda** (managed, or run in Render container)
-3. **Python services** (containerized, Render/Railway)
-4. **Grafana** (Railway free tier)
-
-Live URL in README once deployed.
+The second hardest thing was realising that dbt tests are not optional. The first version of this project had no dbt tests. A schema change in the producer broke the staging model silently, and the conversion funnel showed 0% for two hours before I noticed. Data quality checks are the unit tests of data engineering.
 
 ---
 
-## ⚠️ Known Limitations & Out of Scope
+## Tech stack
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Exactly-once Kafka semantics | Out of scope | See "What's Next" |
-| Multi-broker Kafka cluster | Out of scope | Single broker sufficient |
-| Authentication / Authorization | Out of scope | Not needed for portfolio |
-| CI/CD pipeline | Optional | Stretch goal if time permits |
-| Real payment processing | Out of scope | Simulated only |
-| High-availability (HA) | Out of scope | Single-point-of-failure acceptable locally |
-
----
-
-## 🔮 What's Next: Future Improvements
-
-This section signals awareness of your own system's constraints — a senior engineering trait.
-
-### High Priority
-1. **Exactly-Once Delivery Semantics**
-   - Implement Kafka transactions (idempotent producer + transactional inserts)
-   - Eliminates current at-least-once possibility of duplication
-   - Adds complexity but is production-required
-
-2. **Model Retraining Pipeline**
-   - Weekly DAG via Apache Airflow
-   - Automated model performance tracking
-   - Automatic redeployment if accuracy improves
-
-3. **Schema Evolution**
-   - Kafka Schema Registry (Confluent or open-source)
-   - Handle breaking changes in event schema gracefully
-
-### Medium Priority
-4. **Real-time Alerting**
-   - Threshold-based triggers: "Revenue anomaly > 50% from baseline"
-   - PagerDuty integration for on-call escalation
-
-5. **Data Lineage Tracking**
-   - OpenLineage integration (dbt + Airflow)
-   - Visual DAG of data dependencies in Grafana
-
-6. **Partitioned Tables**
-   - Implement time-based partitioning for PostgreSQL (raw_events, anomalies)
-   - Query performance optimization for historical data
-
-### Nice-to-Have
-7. **Cost Attribution**
-   - Track which product category drives highest lifetime value
-   - Cohort analysis dashboard
-
-8. **A/B Testing Framework**
-   - Event tagging for experimental treatments
-   - Statistical significance calculation
-
-9. **Fraud Detection Refinement**
-   - Rule-based filters + ML scores (ensemble)
-   - Domain expert feedback loop
-
-10. **Auto-Scaling**
-    - Kubernetes deployment (from Docker Compose)
-    - Horizontal scaling of consumer workers
+| Layer | Technology | Why |
+|---|---|---|
+| Message broker | Apache Kafka 3.7 | Industry standard for event streaming; replayable, partitioned, durable |
+| Transformations | dbt 1.8 + PostgreSQL | Version-controlled SQL with built-in testing and lineage |
+| Anomaly detection | scikit-learn (Isolation Forest) | Unsupervised, no labelled data needed, explainable |
+| Orchestration | Apache Airflow 2.9 | Industry standard; DAG-based dependencies beat cron for multi-step pipelines |
+| Visualisation | Grafana 10.4 | Best-in-class for time-series dashboards; version-controllable JSON |
+| Alerting | Slack webhooks | Simple, reliable, zero infra overhead |
+| Event generation | Faker | Realistic synthetic data without privacy concerns |
+| Testing | pytest + dbt test | Unit tests for Python; schema tests for SQL models |
 
 ---
 
-## 🤝 Contributing
+## Author
 
-This is a portfolio project. To extend it:
+Built by [Your Name](https://github.com/yourusername) · CSE graduate · Open to backend and data engineering roles in the Netherlands.
 
-1. Branch from `main`: `git checkout -b feature/your-feature`
-2. Make changes
-3. Test locally: `docker compose up && dbt test`
-4. Push & open PR with clear description of improvement
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0077B5?style=flat-square&logo=linkedin)](https://linkedin.com/in/yourprofile)
+[![Email](https://img.shields.io/badge/Email-say%20hi-EA4335?style=flat-square&logo=gmail)](mailto:you@example.com)
 
 ---
 
-## 📝 License
+## License
 
-This project is open-source for portfolio demonstration purposes. See LICENSE file for details.
-
----
-
-## 📞 Questions?
-
-This README documents design decisions and trade-offs made during development. All choices are deliberate and defensible — ask about any of them during code review.
-
-**Key takeaways for interviewers:**
-- ✅ End-to-end data pipeline (ingestion → transformation → alerting)
-- ✅ Production patterns (idempotent inserts, dead-letter queues, data contracts)
-- ✅ Observable systems (Prometheus + Grafana + Slack)
-- ✅ Explainable ML (Isolation Forest over black-box models)
-- ✅ One-command startup (single `docker compose up`)
-- ✅ Documented trade-offs (ADRs)
-
----
-
-**Last Updated:** 16 April 2026  
-**Portfolio Project for Dutch Data Engineering Roles**
+MIT
