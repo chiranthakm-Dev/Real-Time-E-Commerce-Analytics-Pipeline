@@ -399,10 +399,10 @@ The second hardest thing was realising that dbt tests are not optional. The firs
 
 ## Author
 
-Built by [Your Name](https://github.com/yourusername) · CSE graduate · Open to backend and data engineering roles in the Netherlands.
+Built by [Chirantha K M](https://github.com/chiranthakm-Dev) · CSE graduate · Open to backend and systems engineering roles in the Netherlands.
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0077B5?style=flat-square&logo=linkedin)](https://linkedin.com/in/yourprofile)
-[![Email](https://img.shields.io/badge/Email-say%20hi-EA4335?style=flat-square&logo=gmail)](mailto:you@example.com)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0077B5?style=flat-square&logo=linkedin)](https://www.linkedin.com/in/chiranthkm/)
+[![Email](https://img.shields.io/badge/Email-say%20hi-EA4335?style=flat-square&logo=gmail)](mailto:chirantha.km88@gmail.com)
 
 ---
 
